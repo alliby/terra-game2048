@@ -11,9 +11,9 @@ the game only use Nanovg and GLFW C libraries
 ### Prerequisites
 
 To build this project, you will need:
-	- [Terra](http://terralang.org/)
-    - A C compiler (build.t use Clang by default)
-	- archive utility (For Windows use: `llvm-lib`)
+- [Terra](http://terralang.org/)
+- A C compiler (build.t use Clang by default)
+- archive utility (For Windows use: `llvm-lib`)
 
 ### Build Instructions
 Execute the build script using Terra:
