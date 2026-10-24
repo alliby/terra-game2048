@@ -20,3 +20,13 @@ Execute the build script using Terra:
 ```
 terra build.t
 ```
+
+### Building for the Web (WebAssembly)
+
+Terra's LLVM backend emits a `wasm32` object file, which is then linked by
+[Emscripten](https://emscripten.org/) (it provides libc, GLFW and WebGL 2 as GLES3).
+
+```
+source ./emsdk/emsdk_env.sh
+terra build.t wasm
+```

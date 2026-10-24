@@ -7,6 +7,8 @@ local config = {
 }
 
 -- Platform detection
+-- `terra build.t wasm` builds the web version (requires emsdk, see README)
+is_wasm = arg[1] == "wasm"
 local is_windows = ffi.os == "Windows"
 local is_linux = ffi.os == "Linux"
 local is_macos = ffi.os == "OSX"
@@ -51,8 +53,15 @@ local function join_paths(...)
   return table.concat({...}, sep)
 end
 
+local emsdk = os.getenv("EMSDK")
+if is_wasm then
+  assert(emsdk, "EMSDK is not set, run `source <path-to-emsdk>/emsdk_env.sh` first")
+  config.build_dir = join_paths(config.build_dir, "wasm")
+end
+
 local function build_static_lib(name, sources, cflags)
-  local cc = "clang"
+  local cc = is_wasm and "emcc" or "clang"
+  local ar = is_wasm and "emar" or "ar"
   local lib_name = is_windows and (name .. ".lib") or ("lib" .. name .. ".a")
   local lib_path = join_paths(config.build_dir, lib_name)
   if file_exists(lib_path) then return end
@@ -77,83 +86,145 @@ local function build_static_lib(name, sources, cflags)
     exec { "del", obj_list }
   else
     local obj_list = table.concat(objects, " ")
-    exec { "ar", "rcs", lib_path, obj_list }
+    exec { ar, "rcs", lib_path, obj_list }
     exec { "rm", obj_list }
   end
 end
 
+terralib.includepath = table.concat({
+    "./deps/nanovg/src",
+    "./deps/nanovg/glad/include",
+    "./deps/glfw/include",
+}, ";")
+
 -- Main build process
 if not dir_exists(config.build_dir) then
-  exec { "mkdir ", (is_windows and "" or "-p "), config.build_dir }
+  exec { "mkdir", (is_windows and "" or "-p"), config.build_dir }
 end
 
 -- Build GLAD
-build_static_lib("glad", { "nanovg/glad/src/glad.c" }, { "-I", "deps/nanovg/glad/include" })
+if not is_wasm then
+  build_static_lib("glad", { "nanovg/glad/src/glad.c" }, { "-I", "deps/nanovg/glad/include" })
+end
 
 -- Build NanoVG
-build_static_lib("nanovg", { "nanovg/src/nanovg.c" },
-		 { "-I", "deps/nanovg/src", "-D_CRT_SECURE_NO_WARNINGS", "-DNANOVG_GL3_IMPLEMENTATION" })
+local nanovg_implementation
+if is_wasm then
+  nanovg_implementation = "NANOVG_GLES3_IMPLEMENTATION"
+else
+  nanovg_implementation = "NANOVG_GL3_IMPLEMENTATION"
+end
+
+build_static_lib(
+  "nanovg",
+  { "nanovg/src/nanovg.c" },
+  { "-I", "deps/nanovg/src", "-D_CRT_SECURE_NO_WARNINGS", "-D" .. nanovg_implementation }
+)
 
 -- Build GLFW
-local glfw_sources = {
-  "glfw/src/context.c", "glfw/src/egl_context.c", "glfw/src/init.c",
-  "glfw/src/input.c", "glfw/src/monitor.c", "glfw/src/null_init.c",
-  "glfw/src/null_joystick.c", "glfw/src/null_monitor.c",
-  "glfw/src/null_window.c", "glfw/src/osmesa_context.c",
-  "glfw/src/platform.c", "glfw/src/vulkan.c", "glfw/src/window.c"
-}
+if not is_wasm then
+  local glfw_sources = {
+    "glfw/src/context.c", "glfw/src/egl_context.c", "glfw/src/init.c",
+    "glfw/src/input.c", "glfw/src/monitor.c", "glfw/src/null_init.c",
+    "glfw/src/null_joystick.c", "glfw/src/null_monitor.c",
+    "glfw/src/null_window.c", "glfw/src/osmesa_context.c",
+    "glfw/src/platform.c", "glfw/src/vulkan.c", "glfw/src/window.c"
+  }
 
-if is_windows then
-  local win_sources = {
-    "glfw/src/wgl_context.c", "glfw/src/win32_init.c",
-    "glfw/src/win32_joystick.c", "glfw/src/win32_module.c",
-    "glfw/src/win32_monitor.c", "glfw/src/win32_thread.c",
-    "glfw/src/win32_time.c", "glfw/src/win32_window.c"
-  }
-  for _, src in ipairs(win_sources) do
-    table.insert(glfw_sources, src)
+  if is_windows then
+    local win_sources = {
+      "glfw/src/wgl_context.c", "glfw/src/win32_init.c",
+      "glfw/src/win32_joystick.c", "glfw/src/win32_module.c",
+      "glfw/src/win32_monitor.c", "glfw/src/win32_thread.c",
+      "glfw/src/win32_time.c", "glfw/src/win32_window.c"
+    }
+    for _, src in ipairs(win_sources) do
+      table.insert(glfw_sources, src)
+    end
+    build_static_lib("glfw", glfw_sources, { "-D_GLFW_WIN32" })
+  else
+    local linux_sources = {
+      "glfw/src/linux_joystick.c", "glfw/src/posix_module.c",
+      "glfw/src/posix_poll.c", "glfw/src/posix_thread.c",
+      "glfw/src/posix_time.c", "glfw/src/xkb_unicode.c",
+      "glfw/src/glx_context.c", "glfw/src/x11_init.c",
+      "glfw/src/x11_monitor.c", "glfw/src/x11_window.c"
+    }
+    for _, src in ipairs(linux_sources) do
+      table.insert(glfw_sources, src)
+    end
+    build_static_lib("glfw", glfw_sources, { "-D_GLFW_X11", "-I", "deps/x11-headers" })
   end
-  build_static_lib("glfw", glfw_sources, { "-D_GLFW_WIN32" })
-else
-  local linux_sources = {
-    "glfw/src/linux_joystick.c", "glfw/src/posix_module.c",
-    "glfw/src/posix_poll.c", "glfw/src/posix_thread.c",
-    "glfw/src/posix_time.c", "glfw/src/xkb_unicode.c",
-    "glfw/src/glx_context.c", "glfw/src/x11_init.c",
-    "glfw/src/x11_monitor.c", "glfw/src/x11_window.c"
-  }
-  for _, src in ipairs(linux_sources) do
-    table.insert(glfw_sources, src)
-  end
-  build_static_lib("glfw", glfw_sources, { "-D_GLFW_X11", "-I", "deps/x11-headers" })
 end
 
 -- Build Terra application
 local start = os.clock()
 
-terralib.includepath = table.concat({
-    "./deps/nanovg/src",
-    "./deps/nanovg/glad/include",
-    "./deps/glfw/include"
-}, ";")
+local target -- nil means native
+if is_wasm then
+  -- Terra's LLVM can emit wasm32 objects, but on x86 hosts it rewrites CPU "generic"
+  -- to "x86-64" whatever the triple is, so a wasm-specific CPU name has to be used.
+  -- Features must stay empty: Terra hands them to clang as a single -target-feature.
+  target = terralib.newtarget {
+    Triple = "wasm32-unknown-emscripten",
+    CPU = "mvp",
+    Features = "",
+  }
 
-C = terralib.includecstring [[
-  #include "stdio.h"
-  #include "time.h"
-  #define _CRT_SECURE_NO_WARNINGS
-  #define NANOVG_GL3_IMPLEMENTATION
-  #include "glad/glad.h"
-  #include "GLFW/glfw3.h"
-  #include "nanovg.h"
-  #include "nanovg_gl.h"
-]]
+  -- Parse C headers against the emscripten sysroot (same search order as emcc)
+  -- instead of the host libc, so types like `long` and `size_t` match wasm32.
+  local sysroot = join_paths(emsdk, "upstream", "emscripten", "cache", "sysroot")
+  local cargs = {
+    "-internal-isystem", join_paths(sysroot, "include", "compat"),
+    "-internal-isystem", "$CLANG_RESOURCE$/include",
+    "-internal-isystem", join_paths(sysroot, "include"),
+  }
+
+  C = terralib.includecstring([[
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <time.h>
+    #include <emscripten.h>
+    #include <GLES3/gl3.h>
+    #include <GLFW/glfw3.h>
+    #define NANOVG_GLES3_IMPLEMENTATION
+    #include "nanovg.h"
+    #include "nanovg_gl.h"
+  ]], cargs, target)
+else
+  C = terralib.includecstring(string.format([[
+    #include "stdio.h"
+    #include "time.h"
+    #define _CRT_SECURE_NO_WARNINGS
+    #define %s
+    #include "glad/glad.h"
+    #include "GLFW/glfw3.h"
+    #include "nanovg.h"
+    #include "nanovg_gl.h"
+  ]], nanovg_implementation))
+end
 
 local main_fn = require "main"
 
 -- Link final executable
 local output, link_flags, entry_point
 
-if is_windows then
+if is_wasm then
+  local obj = join_paths(config.build_dir, config.app_name .. ".o")
+  terralib.saveobj(obj, { main = main_fn }, nil, target)
+
+  -- Let emscripten link the object: it provides libc, GLFW and GLES3 (WebGL 2)
+  exec { "mkdir", "-p", "web" }
+  exec {
+    "emcc", obj, join_paths(config.build_dir, "libnanovg.a"),
+    "-O2", "-sUSE_GLFW=3", "-sMIN_WEBGL_VERSION=2", "-sMAX_WEBGL_VERSION=2",
+    "-sALLOW_MEMORY_GROWTH", "--shell-file", "shell.html",
+    "-o", "web/index.html"
+  }
+  print(string.format("\n=== Build completed in %.2f seconds ===\n", os.clock() - start))
+  return
+elseif is_windows then
   output = config.app_name .. ".exe"
   entry_point = "WinMain"
   link_flags = {
@@ -166,7 +237,7 @@ elseif is_linux then
   entry_point = "main"
   link_flags = {
     "-Lbuild", "-l:libglad.a", "-l:libglfw.a", "-l:libnanovg.a",
-    "-lm", "-s"
+    "-lm"
   }
 else -- macOS
   output = "./" .. config.app_name

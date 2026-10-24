@@ -44,6 +44,47 @@ end
 math = require "./math"
 require "game"
 
+
+-- Platform specific functions: on the web GLES3 is called directly,
+-- natively GL functions are loaded through glad
+local nvgCreateGL, nvgDeleteGL, glViewport, glClearColor, glClear
+if is_wasm then
+  nvgCreateGL, nvgDeleteGL = C.nvgCreateGLES3, C.nvgDeleteGLES3
+  glViewport, glClearColor, glClear = C.glViewport, C.glClearColor, C.glClear
+else
+  nvgCreateGL, nvgDeleteGL = C.nvgCreateGL3, C.nvgDeleteGL3
+  glViewport, glClearColor, glClear = C.glad_glViewport, C.glad_glClearColor, C.glad_glClear
+end
+
+struct App {
+  window: &C.GLFWwindow,
+  vg: &C.NVGcontext,
+  state: GameState,
+  t: double,
+}
+
+-- Draw a single frame, natively it is called in a loop, on the web by the browser
+terra frame(app: &App)
+  var new_t = C.glfwGetTime()
+  var dt = new_t - app.t
+  app.t = new_t
+
+  glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
+  glClearColor(BACKGROUND_COLOR)
+  glClear(C.GL_COLOR_BUFFER_BIT or C.GL_DEPTH_BUFFER_BIT or C.GL_STENCIL_BUFFER_BIT)
+  C.nvgBeginFrame(app.vg, WINDOW_WIDTH, WINDOW_HEIGHT, 1.0)
+
+  defer C.glfwSwapBuffers(app.window)
+  defer C.glfwPollEvents()
+  defer C.nvgEndFrame(app.vg)
+
+  draw(app.vg, &app.state, dt)
+
+  -- reset keys and mouse button
+  PRESSED_KEY = 0
+  IS_MOUSE_PRESSED = false
+end
+
 terra main()
   -- initialize GLFW
   if C.glfwInit() == 0 then
@@ -77,45 +118,35 @@ terra main()
   C.glfwSetMouseButtonCallback(window, mouse_button_callback)
 
   -- load gl function pointers with glad
-  if C.gladLoadGLLoader([C.GLADloadproc](C.glfwGetProcAddress)) == 0 then
-    perror("ERROR: Could not load glad loader\n")
-    return -1
-  end
+  escape if not is_wasm then emit quote
+    if C.gladLoadGLLoader([C.GLADloadproc](C.glfwGetProcAddress)) == 0 then
+      perror("ERROR: Could not load glad loader\n")
+      return -1
+    end
+  end end end
 
   -- Create NanoVG Context
-  var vg = C.nvgCreateGL3([bit.bor(C.NVG_STENCIL_STROKES, C.NVG_DEBUG , C.NVG_ANTIALIAS)])
+  var vg = nvgCreateGL([bit.bor(C.NVG_STENCIL_STROKES, C.NVG_DEBUG , C.NVG_ANTIALIAS)])
   if vg == nil then
     perror("ERROR: Failed to create NANOVG context\n")
     return -1
   end
-  defer C.nvgDeleteGL3(vg)
+  defer nvgDeleteGL(vg)
 
   -- Add font to NanoVG
   var font = C.nvgCreateFontMem(vg, "default", [&uint8]([FONT_BYTES]), [#FONT_BYTES], 0)
 
-  var state = GameState.new()
-  var t = C.glfwGetTime()
-  while not [bool](C.glfwWindowShouldClose(window)) do
-    var new_t = C.glfwGetTime()
-    var dt = new_t - t
-    t = new_t
+  var app = App { window, vg, GameState.new(), C.glfwGetTime() }
 
-    C.glad_glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
-    C.glad_glClearColor(BACKGROUND_COLOR)
-    C.glad_glClear(C.GL_COLOR_BUFFER_BIT or C.GL_DEPTH_BUFFER_BIT or C.GL_STENCIL_BUFFER_BIT)
-    C.nvgBeginFrame(vg, WINDOW_WIDTH, WINDOW_HEIGHT, 1.0)
-
-    defer C.glfwSwapBuffers(window)
-    defer C.glfwPollEvents()
-    defer C.nvgEndFrame(vg)
-
-    draw(vg, &state, dt)
-
-    -- reset keys and mouse button
-    PRESSED_KEY = 0
-    IS_MOUSE_PRESSED = false
-
-  end
+  escape if is_wasm then emit quote
+    -- The browser owns the event loop: hand it the frame callback.
+    -- simulate_infinite_loop=1 never returns, so the deferred cleanups don't run.
+    C.emscripten_set_main_loop_arg([{&opaque} -> {}](frame), &app, 0, true)
+  end else emit quote
+    while not [bool](C.glfwWindowShouldClose(window)) do
+      frame(&app)
+    end
+  end end end
 
   return 0
 end

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>2048</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #e6e6e6; }
+    body { display: flex; align-items: center; justify-content: center; }
+    canvas { display: block; outline: none; max-width: 100vw; max-height: 100vh; object-fit: contain; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+  <script>
+    var Module = { canvas: document.getElementById("canvas") };
+    // Keep arrow keys from scrolling the page
+    window.addEventListener("keydown", function (e) {
+      if (e.key.startsWith("Arrow") || e.key === " ") e.preventDefault();
+    });
+  </script>
+  {{{ SCRIPT }}}
+</body>
+</html>
